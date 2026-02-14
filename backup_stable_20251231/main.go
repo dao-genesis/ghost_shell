@@ -113,9 +113,8 @@ func main() {
 	http.HandleFunc("/stream", handleStream)
 	http.HandleFunc("/stream/audio", handleAudioStream) // Audio endpoint
 	http.HandleFunc("/capture", handleCapture)
-	http.HandleFunc("/launch", handleLaunch)        // Quick Launch
-	http.HandleFunc("/interact", handleInteract)    // HTTP endpoint for input commands
-	http.HandleFunc("/audio-only", handleAudioOnly) // Standalone audio interface
+	http.HandleFunc("/launch", handleLaunch)     // Quick Launch
+	http.HandleFunc("/interact", handleInteract) // HTTP endpoint for input commands
 
 	// Start audio broadcast loop
 	go broadcastAudio()
@@ -154,16 +153,6 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 	data, err := staticFiles.ReadFile("static/ghost_client.html")
 	if err != nil {
 		http.Error(w, "Client not found", 404)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html")
-	w.Write(data)
-}
-
-func handleAudioOnly(w http.ResponseWriter, r *http.Request) {
-	data, err := staticFiles.ReadFile("static/audio_only.html")
-	if err != nil {
-		http.Error(w, "Audio page not found", 404)
 		return
 	}
 	w.Header().Set("Content-Type", "text/html")
@@ -211,7 +200,7 @@ func handleLock(w http.ResponseWriter, r *http.Request) {
 
 	var req LockRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", 400)
+		http.Error(w, err.Error(), 400)
 		return
 	}
 
@@ -332,7 +321,7 @@ func handleInteract(w http.ResponseWriter, r *http.Request) {
 
 	var cmd Command
 	if err := json.NewDecoder(r.Body).Decode(&cmd); err != nil {
-		http.Error(w, "Invalid request body", 400)
+		http.Error(w, err.Error(), 400)
 		return
 	}
 
@@ -498,7 +487,7 @@ func handleLaunch(w http.ResponseWriter, r *http.Request) {
 		App string `json:"app"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body", 400)
+		http.Error(w, err.Error(), 400)
 		return
 	}
 

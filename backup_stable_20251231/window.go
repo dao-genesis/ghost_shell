@@ -149,20 +149,11 @@ func itoa(v int) []byte {
 	if v == 0 {
 		return []byte("0")
 	}
-	neg := false
-	if v < 0 {
-		neg = true
-		v = -v
-	}
 	var buf [20]byte
 	i := len(buf) - 1
 	for v > 0 {
 		buf[i] = byte('0' + v%10)
 		v /= 10
-		i--
-	}
-	if neg {
-		buf[i] = '-'
 		i--
 	}
 	return buf[i+1:]

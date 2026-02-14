@@ -1,0 +1,275 @@
+<!DOCTYPE html>
+<html lang="zh">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ghost Shell - 音频专用</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: #fff;
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 500px;
+            width: 100%;
+            text-align: center;
+        }
+
+        h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+        }
+
+        .subtitle {
+            color: #aaa;
+            margin-bottom: 30px;
+        }
+
+        .status {
+            font-size: 18px;
+            margin-bottom: 20px;
+            padding: 15px;
+            border-radius: 10px;
+            background: rgba(0, 0, 0, 0.3);
+        }
+
+        .status.connected {
+            background: rgba(0, 200, 100, 0.3);
+        }
+
+        .status.error {
+            background: rgba(200, 50, 50, 0.3);
+        }
+
+        .btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border: none;
+            color: white;
+            padding: 15px 40px;
+            font-size: 18px;
+            border-radius: 30px;
+            cursor: pointer;
+            margin: 10px;
+            transition: transform 0.2s;
+        }
+
+        .btn:hover {
+            transform: scale(1.05);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn.stop {
+            background: linear-gradient(135deg, #ff416c 0%, #ff4b2b 100%);
+        }
+
+        .stats {
+            margin-top: 30px;
+            font-size: 14px;
+            color: #aaa;
+        }
+
+        .stat-item {
+            display: inline-block;
+            margin: 0 15px;
+        }
+
+        .volume-control {
+            margin-top: 20px;
+        }
+
+        .volume-control input {
+            width: 200px;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <h1>🔊 音频专用接口</h1>
+        <p class="subtitle">Ghost Shell Audio Only</p>
+
+        <div id="status" class="status">未连接</div>
+
+        <div>
+            <button id="startBtn" class="btn" onclick="startAudio()">▶ 开始播放</button>
+            <button id="stopBtn" class="btn stop" onclick="stopAudio()" disabled>⏹ 停止</button>
+        </div>
+
+        <div class="volume-control">
+            <label>音量: <span id="volumeValue">100</span>%</label><br>
+            <input type="range" id="volume" min="0" max="100" value="100" oninput="setVolume(this.value)">
+        </div>
+
+        <div class="stats">
+            <span class="stat-item">数据: <span id="dataRate">0</span> KB/s</span>
+            <span class="stat-item">延迟: <span id="latency">0</span> ms</span>
+            <span class="stat-item">丢弃: <span id="dropped">0</span></span>
+        </div>
+    </div>
+
+    <script>
+        let audioWs = null;
+        let audioContext = null;
+        let gainNode = null;
+        let audioNextTime = 0;
+        let droppedCount = 0;
+        let bytesReceived = 0;
+        let lastBytesTime = Date.now();
+
+        // 配置
+        const AUDIO_SAMPLE_RATE = 16000;
+        const AUDIO_CHANNELS = 1;
+
+        function getWsUrl() {
+            const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+            return `${protocol}//${location.host}/stream/audio`;
+        }
+
+        function updateStatus(msg, type = '') {
+            const el = document.getElementById('status');
+            el.textContent = msg;
+            el.className = 'status ' + type;
+        }
+
+        function startAudio() {
+            try {
+                audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                    sampleRate: AUDIO_SAMPLE_RATE
+                });
+
+                gainNode = audioContext.createGain();
+                gainNode.connect(audioContext.destination);
+                setVolume(document.getElementById('volume').value);
+
+                audioNextTime = 0;
+                droppedCount = 0;
+                bytesReceived = 0;
+
+                audioWs = new WebSocket(getWsUrl());
+                audioWs.binaryType = 'arraybuffer';
+
+                audioWs.onopen = () => {
+                    updateStatus('✅ 已连接 - 正在播放', 'connected');
+                    document.getElementById('startBtn').disabled = true;
+                    document.getElementById('stopBtn').disabled = false;
+                };
+
+                audioWs.onmessage = (event) => {
+                    if (!audioContext || audioContext.state === 'closed') return;
+                    if (audioContext.state === 'suspended') audioContext.resume();
+
+                    bytesReceived += event.data.byteLength;
+
+                    const pcmData = new Int16Array(event.data);
+                    const samples = pcmData.length;
+                    if (samples <= 0) return;
+
+                    // Convert Int16 to Float32
+                    const buffer = audioContext.createBuffer(1, samples, AUDIO_SAMPLE_RATE);
+                    const channel = buffer.getChannelData(0);
+                    for (let i = 0; i < samples; i++) {
+                        channel[i] = pcmData[i] / 32768;
+                    }
+
+                    const source = audioContext.createBufferSource();
+                    source.buffer = buffer;
+                    source.connect(gainNode);
+
+                    const now = audioContext.currentTime;
+
+                    // 队列调度
+                    if (audioNextTime < now) {
+                        audioNextTime = now + 0.05;
+                    }
+
+                    const latency = audioNextTime - now;
+                    document.getElementById('latency').textContent = Math.round(latency * 1000);
+
+                    // 控制延迟
+                    if (latency > 0.5) {
+                        // 太落后 - 丢弃
+                        droppedCount++;
+                        document.getElementById('dropped').textContent = droppedCount;
+                        return;
+                    } else if (latency > 0.2) {
+                        source.playbackRate.value = 1.1;
+                    } else {
+                        source.playbackRate.value = 1.0;
+                    }
+
+                    source.start(audioNextTime);
+                    audioNextTime += buffer.duration / source.playbackRate.value;
+                };
+
+                audioWs.onerror = () => {
+                    updateStatus('❌ 连接错误', 'error');
+                };
+
+                audioWs.onclose = () => {
+                    updateStatus('连接已断开');
+                    document.getElementById('startBtn').disabled = false;
+                    document.getElementById('stopBtn').disabled = true;
+                };
+
+                // 数据速率统计
+                setInterval(() => {
+                    const now = Date.now();
+                    const elapsed = (now - lastBytesTime) / 1000;
+                    const rate = bytesReceived / elapsed / 1024;
+                    document.getElementById('dataRate').textContent = rate.toFixed(1);
+                    bytesReceived = 0;
+                    lastBytesTime = now;
+                }, 1000);
+
+            } catch (e) {
+                updateStatus('初始化失败: ' + e, 'error');
+            }
+        }
+
+        function stopAudio() {
+            if (audioWs) {
+                audioWs.close();
+                audioWs = null;
+            }
+            if (audioContext) {
+                audioContext.close();
+                audioContext = null;
+            }
+            updateStatus('已停止');
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+        }
+
+        function setVolume(val) {
+            document.getElementById('volumeValue').textContent = val;
+            if (gainNode) {
+                gainNode.gain.value = val / 100;
+            }
+        }
+    </script>
+</body>
+
+</html>
